@@ -3,8 +3,11 @@ from datetime import datetime
 import json
 import os
 import tempfile
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from search_engine.index_service import IndexService
 
-def show_index_stats(search_engine):
+def show_index_stats(search_engine: 'IndexService'):
     """显示索引统计信息"""
     try:
         stats = search_engine.get_stats()
@@ -84,7 +87,7 @@ def check_index_quality(search_engine):
     except Exception as e:
         return f"<p style='color: red;'>索引质量检查失败: {str(e)}</p>"
 
-def view_inverted_index(search_engine):
+def view_inverted_index(search_engine: 'IndexService'):
     """查看倒排索引内容"""
     try:
         index_service = search_engine.index_service
@@ -97,7 +100,7 @@ def view_inverted_index(search_engine):
     except Exception as e:
         return [["错误", str(e)]]
 
-def get_all_documents(search_engine):
+def get_all_documents(search_engine: 'IndexService'):
     """获取所有文档列表"""
     try:
         documents = search_engine.get_all_documents()
@@ -114,7 +117,7 @@ def get_all_documents(search_engine):
     except Exception as e:
         return [["错误", str(e)]]
 
-def export_documents(search_engine):
+def export_documents(search_engine: 'IndexService'):
     """导出所有文档到JSON文件"""
     try:
         documents = search_engine.get_all_documents()

@@ -29,4 +29,7 @@ click>=8.0.0       # CLI tools
 # ML/AI extensions
 transformers>=4.20.0  # For advanced NLP
 torch>=1.12.0         # Deep learning (optional)
-sentence-transformers>=2.2.0  # Sentence embeddings (optional) 
+sentence-transformers>=2.2.0  # Sentence embeddings (optional)
+
+# LLM API clients
+openai>=1.0.0         # OpenAI/DeepSeek API client 

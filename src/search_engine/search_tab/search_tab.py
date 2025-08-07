@@ -10,14 +10,20 @@ from ..data_utils import (
     validate_search_params,
     validate_click_params
 )
+from ..rag_service import get_rag_service
 import re
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from search_engine.index_service import IndexService
+    from search_engine.data_service import DataService
 
 # 全局变量用于存储当前request_id
 current_request_id = None
 
-def perform_search(index_service, data_service, query: str, sort_mode: str = "ctr"):
+def perform_search(index_service: 'IndexService', data_service: 'DataService', query: str, sort_mode: str = "ctr"):
+    """执行搜索，支持RAG功能"""
     if not query or not query.strip():
-        return [], pd.DataFrame(), ""
+        return [], pd.DataFrame(), "", ""
     try:
         query_clean = query.strip()
         doc_ids = index_service.retrieve(query_clean, top_k=20)
@@ -29,7 +35,7 @@ def perform_search(index_service, data_service, query: str, sort_mode: str = "ct
         final = ranked
         
         if not final:
-            return [], pd.DataFrame(), ""
+            return [], pd.DataFrame(), "", ""
         
         request_id = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{uuid.uuid4().hex[:8]}"
         docs_info = []
@@ -59,11 +65,22 @@ def perform_search(index_service, data_service, query: str, sort_mode: str = "ct
             
             docs_info.append(doc_info)
         
+        # RAG处理：只在TF-IDF模式下启用
+        rag_answer = ""
+        if sort_mode == "tfidf":
+            try:
+                rag_service = get_rag_service(index_service)
+                rag_answer = rag_service.enhance_search_results(query_clean, final, top_k=3)
+                print(f"🤖 RAG回答生成成功，长度: {len(rag_answer)}")
+            except Exception as e:
+                print(f"❌ RAG处理失败: {e}")
+                rag_answer = f"RAG功能暂时不可用: {str(e)}"
+        
         # 获取CTR数据框
-        return docs_info, get_ctr_dataframe(request_id), request_id
+        return docs_info, get_ctr_dataframe(request_id), request_id, rag_answer
     except Exception as e:
         print(f"❌ 搜索失败: {e}")
-        return [], pd.DataFrame(), ""
+        return [], pd.DataFrame(), "", ""
 
 def apply_sorting_mode(results: list, sort_mode: str) -> list:
     """应用排序模式"""
@@ -183,6 +200,14 @@ def build_search_tab(index_service, data_service):
                     row_count=10,
                     col_count=4
                 )
+        
+        # 新增RAG组件
+        rag_answer = gr.HTML(
+            value="<p>选择TF-IDF模式并执行搜索，将显示RAG生成的智能回答...</p>",
+            label="🤖 RAG智能回答",
+            visible=False
+        )
+        
         doc_content = gr.HTML(value="<p>点击下方'查看全文'按钮查看文档内容...</p>", label="文档内容")
         back_btn = gr.Button("⬅️ 返回搜索结果", visible=False)
         sample_output = gr.Dataframe(
@@ -194,8 +219,8 @@ def build_search_tab(index_service, data_service):
         with gr.Accordion("🧪 测试用例", open=False):
             gr.Markdown("""推荐测试查询：人工智能、机器学习、深度学习等""")
         # 检索按钮事件
-        def update_results(query, sort_mode):
-            docs_info, df, request_id = perform_search(index_service, data_service, query, sort_mode)
+        def update_results_with_rag(query, sort_mode):
+            docs_info, df, request_id, rag_answer = perform_search(index_service, data_service, query, sort_mode)
             
             # 转换为 DataFrame 展示格式，根据排序模式显示不同的列
             formatted_results = []
@@ -222,30 +247,41 @@ def build_search_tab(index_service, data_service):
             # 根据排序模式创建DataFrame
             if sort_mode == "ctr":
                 # 创建CTR模式的DataFrame
-                df_display = pd.DataFrame(formatted_results, columns=["文档ID", "TF-IDF分数", "CTR分数", "摘要"])
+                df_display = pd.DataFrame(formatted_results, columns=("文档ID", "TF-IDF分数", "CTR分数", "摘要"))
                 mode_text = "CTR智能排序"
             else:
                 # 创建TF-IDF模式的DataFrame
-                df_display = pd.DataFrame(formatted_results, columns=["文档ID", "TF-IDF分数", "文档长度", "摘要"])
+                df_display = pd.DataFrame(formatted_results, columns=("文档ID", "TF-IDF分数", "文档长度", "摘要"))
                 mode_text = "TF-IDF传统排序"
             
             # 显示当前排序模式
             print(f"🔍 当前排序模式: {mode_text}")
             
-            return df_display, df, request_id
+            # 根据排序模式决定是否显示RAG回答
+            if sort_mode == "tfidf" and rag_answer:
+                rag_html = f"""
+                <div style="background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3; margin: 10px 0;">
+                    <h4 style="margin: 0 0 10px 0; color: #1976d2;">🤖 智能回答</h4>
+                    <p style="margin: 0; line-height: 1.6; color: #333;">{rag_answer}</p>
+                </div>
+                """
+                return df_display, df, request_id, rag_html, gr.update(visible=True)
+            else:
+                return df_display, df, request_id, "", gr.update(visible=False)
+        
         search_btn.click(
-            fn=update_results,
+            fn=update_results_with_rag,
             inputs=[query_input, sort_mode],
-            outputs=[results_df, sample_output, request_id_state]
+            outputs=[results_df, sample_output, request_id_state, rag_answer, rag_answer]
         )
         search_stats_btn.click(
             fn=show_search_stats,
             outputs=doc_content
         )
         query_input.submit(
-            fn=update_results,
+            fn=update_results_with_rag,
             inputs=[query_input, sort_mode],
-            outputs=[results_df, sample_output, request_id_state]
+            outputs=[results_df, sample_output, request_id_state, rag_answer, rag_answer]
         )
         def refresh_samples(rid):
             if rid:
