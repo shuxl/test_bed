@@ -67,7 +67,7 @@ def perform_search(index_service: 'IndexService', data_service: 'DataService', q
         
         # RAG处理：只在TF-IDF模式下启用
         rag_answer = ""
-        if sort_mode == "tfidf":
+        if sort_mode == "tfidf_":
             try:
                 rag_service = get_rag_service(index_service)
                 rag_answer = rag_service.enhance_search_results(query_clean, final, top_k=3)
@@ -258,7 +258,8 @@ def build_search_tab(index_service, data_service):
             print(f"🔍 当前排序模式: {mode_text}")
             
             # 根据排序模式决定是否显示RAG回答
-            if sort_mode == "tfidf" and rag_answer:
+            # TODO deepseek的接入，暂时不需要
+            if sort_mode == "tfidf——" and rag_answer:
                 rag_html = f"""
                 <div style="background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3; margin: 10px 0;">
                     <h4 style="margin: 0 0 10px 0; color: #1976d2;">🤖 智能回答</h4>

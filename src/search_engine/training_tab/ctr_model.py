@@ -2,6 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 CTR模型模块 - 训练和使用CTR模型进行排序
+
+CTR (Click-Through Rate) 点击率模型用于预测用户点击搜索结果的概率。
+该模型通过学习历史点击数据，优化搜索结果排序，提高用户体验。
+
+主要功能：
+1. 特征工程：从原始数据中提取多种特征
+2. 模型训练：使用逻辑回归训练CTR预测模型
+3. 预测排序：根据预测的点击率重新排序搜索结果
 """
 
 import pandas as pd
@@ -19,52 +27,84 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from .ctr_config import CTRFeatureConfig, CTRTrainingConfig, ctr_feature_config, ctr_training_config
 
 class CTRModel:
-    """CTR模型类"""
+    """
+    CTR模型类 - 负责训练和使用点击率预测模型
+    
+    主要组件：
+    - model: 训练好的逻辑回归模型
+    - vectorizer: 文本向量化器（当前未使用）
+    - scaler: 特征标准化器
+    - is_trained: 模型训练状态标志
+    """
     
     def __init__(self):
-        self.model = None
-        self.vectorizer = None
-        self.scaler = None
-        self.is_trained = False
+        """初始化CTR模型"""
+        self.model = None          # 逻辑回归模型
+        self.vectorizer = None     # 文本向量化器（预留）
+        self.scaler = None         # 特征标准化器
+        self.is_trained = False    # 训练状态标志
     
     def extract_features(self, ctr_data: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
-        """从CTR数据中提取特征"""
+        """
+        从CTR数据中提取特征
+        
+        Args:
+            ctr_data: CTR数据列表，每个元素包含query, doc_id, position, summary, 
+                     score, clicked, timestamp等字段
+        
+        Returns:
+            features: 特征矩阵 (样本数, 特征数)
+            labels: 标签数组 (样本数,)
+        
+        特征说明：
+        1. 位置特征：搜索结果在列表中的位置
+        2. 长度特征：查询、文档、摘要的字符长度
+        3. 匹配特征：查询词与摘要的匹配程度
+        4. 历史特征：基于历史数据的点击率统计
+        5. 衰减特征：位置对点击率的影响
+        6. 统计特征：词数量、时间特征等
+        """
         if not ctr_data:
             return np.array([]), np.array([])
         
-        # 转换为DataFrame
+        # 转换为DataFrame便于处理
         df = pd.DataFrame(ctr_data)
         
-        # 1. 位置特征（绝对位置）
+        # ========== 基础特征提取 ==========
+        
+        # 1. 位置特征（绝对位置）- 位置越靠前，点击率通常越高
         position_features = df['position'].values.reshape(-1, 1)
         
-        # 2. 文档长度特征
+        # 2. 文档长度特征 - 摘要长度可能影响用户点击意愿
         doc_lengths = df['summary'].str.len().values.reshape(-1, 1)
         
-        # 3. 查询长度特征
+        # 3. 查询长度特征 - 查询复杂度可能影响点击行为
         query_lengths = df['query'].str.len().values.reshape(-1, 1)
         
-        # 4. 摘要长度特征
+        # 4. 摘要长度特征 - 与文档长度相同，但作为独立特征
         summary_lengths = df['summary'].str.len().values.reshape(-1, 1)
         
-        # 5. 查询词在摘要中的匹配度
+        # 5. 查询词在摘要中的匹配度 - 核心特征，匹配度越高点击率越高
         match_scores = []
         for _, row in df.iterrows():
+            # 使用jieba分词，计算查询词与摘要词的匹配比例
             query_words = set(jieba.lcut(row['query']))
             summary_words = set(jieba.lcut(row['summary']))
             if len(query_words) > 0:
+                # 匹配率 = 交集词数 / 查询词总数
                 match_ratio = len(query_words.intersection(summary_words)) / len(query_words)
             else:
                 match_ratio = 0
             match_scores.append(match_ratio)
         match_scores = np.array(match_scores).reshape(-1, 1)
         
-        # 6. 历史点击率特征（基于查询的统计）- 修复数据泄露
+        # ========== 历史特征提取（避免数据泄露） ==========
+        
         # 按时间戳排序，确保历史特征只使用过去的数据
         df_sorted = df.sort_values('timestamp').reset_index(drop=True)
         
-        query_ctr_features = []
-        doc_ctr_features = []
+        query_ctr_features = []  # 查询历史CTR
+        doc_ctr_features = []    # 文档历史CTR
         
         for idx, row in df_sorted.iterrows():
             # 查询历史CTR - 只使用当前样本之前的数据
@@ -89,7 +129,7 @@ class CTRModel:
                 doc_ctr = 0.1  # 默认值
             doc_ctr_features.append(doc_ctr)
         
-        # 按原始顺序重新排列
+        # 按原始顺序重新排列特征
         original_order = df.index
         query_ctr_features = [query_ctr_features[i] for i in original_order]
         doc_ctr_features = [doc_ctr_features[i] for i in original_order]
@@ -97,22 +137,23 @@ class CTRModel:
         query_ctr_features = np.array(query_ctr_features).reshape(-1, 1)
         doc_ctr_features = np.array(doc_ctr_features).reshape(-1, 1)
         
-        # 7. 添加更多变化性特征
-        # 查询词数量
+        # ========== 扩展特征提取 ==========
+        
+        # 7. 查询词数量 - 查询复杂度特征
         query_word_counts = []
         for _, row in df.iterrows():
             word_count = len(jieba.lcut(row['query']))
             query_word_counts.append(word_count)
         query_word_counts = np.array(query_word_counts).reshape(-1, 1)
         
-        # 摘要词数量
+        # 8. 摘要词数量 - 文档复杂度特征
         summary_word_counts = []
         for _, row in df.iterrows():
             word_count = len(jieba.lcut(row['summary']))
             summary_word_counts.append(word_count)
         summary_word_counts = np.array(summary_word_counts).reshape(-1, 1)
         
-        # 时间特征（基于timestamp的数值化）
+        # 9. 时间特征 - 基于时间戳的数值化特征
         time_features = []
         for _, row in df.iterrows():
             try:
@@ -124,31 +165,42 @@ class CTRModel:
                 time_features.append(0)
         time_features = np.array(time_features).reshape(-1, 1)
         
-        # 8. 位置衰减特征（位置越靠前，权重越高）
+        # 10. 位置衰减特征 - 位置越靠前，权重越高
         position_decay = 1.0 / (position_features + 1)  # 避免除零
         
-        # 组合所有特征
+        # ========== 特征组合 ==========
+        
+        # 组合所有特征，形成特征矩阵
         features = np.hstack([
-            position_features,           # 位置
-            doc_lengths,                 # 文档长度
-            query_lengths,               # 查询长度
-            summary_lengths,             # 摘要长度
-            match_scores,                # 查询匹配度
-            query_ctr_features,          # 查询历史CTR
-            doc_ctr_features,            # 文档历史CTR
-            position_decay,              # 位置衰减
-            query_word_counts,           # 查询词数量
-            summary_word_counts,         # 摘要词数量
+            position_features,           # 位置特征
+            doc_lengths,                 # 文档长度特征
+            query_lengths,               # 查询长度特征
+            summary_lengths,             # 摘要长度特征
+            match_scores,                # 查询匹配度特征
+            query_ctr_features,          # 查询历史CTR特征
+            doc_ctr_features,            # 文档历史CTR特征
+            position_decay,              # 位置衰减特征
+            query_word_counts,           # 查询词数量特征
+            summary_word_counts,         # 摘要词数量特征
             time_features,               # 时间特征
-            df['score'].values.reshape(-1, 1)  # 原始相似度分数
+            df['score'].values.reshape(-1, 1)  # 原始相似度分数特征
         ])
         
-        # 标签
+        # 提取标签（是否点击）
         labels = df['clicked'].values
         
         return features, labels
     
     def _empty_metrics(self, error_msg):
+        """
+        返回空的评估指标（用于错误情况）
+        
+        Args:
+            error_msg: 错误信息
+        
+        Returns:
+            包含错误信息的空指标字典
+        """
         return {
             'error': error_msg,
             'auc': 0.0,
@@ -164,9 +216,27 @@ class CTRModel:
         }
     
     def train(self, ctr_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """训练CTR模型"""
+        """
+        训练CTR模型
+        
+        Args:
+            ctr_data: CTR训练数据列表
+        
+        Returns:
+            训练结果字典，包含模型性能指标和数据质量信息
+        
+        训练流程：
+        1. 数据质量检查
+        2. 特征提取
+        3. 数据标准化
+        4. 训练测试集分割
+        5. 模型训练
+        6. 性能评估
+        """
         if not ctr_data:
             return self._empty_metrics('没有CTR数据用于训练')
+        
+        # ========== 数据质量检查 ==========
         
         # 检查数据分布
         df = pd.DataFrame(ctr_data)
@@ -174,6 +244,7 @@ class CTRModel:
         click_samples = df['clicked'].sum()
         no_click_samples = total_samples - click_samples
         
+        # 检查最小样本数要求
         min_samples = CTRTrainingConfig.MIN_SAMPLES
         if total_samples < min_samples:
             return self._empty_metrics(f'数据量不足，需要至少{min_samples}条记录，当前只有{total_samples}条')
@@ -195,36 +266,48 @@ class CTRModel:
             return self._empty_metrics(f'位置多样性不足，需要至少3个不同位置，当前只有{unique_positions}个')
         
         try:
-            # 提取特征
+            # ========== 特征提取 ==========
             features, labels = self.extract_features(ctr_data)
             if len(features) == 0:
                 return self._empty_metrics('特征提取失败')
+            
             # 检查特征质量 - 降低阈值，允许更多变化
             feature_std = np.std(features, axis=0)
             if np.any(feature_std < 1e-8):  # 降低阈值从1e-6到1e-8
                 print(f"警告: 特征标准差过小: {feature_std}")
                 # 不直接返回错误，而是尝试继续训练
-            # 数据标准化
+            
+            # ========== 数据标准化 ==========
             self.scaler = StandardScaler()
             features_scaled = self.scaler.fit_transform(features)
+            
+            # ========== 训练测试集分割 ==========
+            # 使用分层抽样，确保训练集和测试集的点击率分布一致
             sss = StratifiedShuffleSplit(n_splits=1, test_size=0.3, random_state=42)
             for train_idx, test_idx in sss.split(features_scaled, labels):
                 X_train, X_test = features_scaled[train_idx], features_scaled[test_idx]
                 y_train, y_test = labels[train_idx], labels[test_idx]
+            
+            # 检查训练集和测试集的点击样本
             train_clicks = np.sum(y_train)
             test_clicks = np.sum(y_test)
             if train_clicks < 1 or test_clicks < 1:
                 return self._empty_metrics('训练集或测试集缺少点击样本')
+            
+            # ========== 模型训练 ==========
             self.model = LogisticRegression(
                 random_state=42, 
-                max_iter=1000,
-                C=0.1,
-                class_weight='balanced'
+                max_iter=1000,        # 最大迭代次数
+                C=0.1,                # 正则化参数，较小的C表示更强的正则化
+                class_weight='balanced'  # 处理样本不平衡问题
             )
             self.model.fit(X_train, y_train)
+            
+            # ========== 模型评估 ==========
             y_pred = self.model.predict(X_test)
             y_pred_proba = self.model.predict_proba(X_test)[:, 1]
-            # 计算指标
+            
+            # 计算AUC分数
             try:
                 auc = roc_auc_score(y_test, y_pred_proba)
             except Exception as e:
@@ -234,7 +317,7 @@ class CTRModel:
             # 计算准确率
             accuracy = (y_pred == y_test).mean()
             
-            # 计算精确率、召回率、F1
+            # 计算精确率、召回率、F1分数
             try:
                 report = classification_report(y_test, y_pred, output_dict=True, zero_division='warn')
                 if 'weighted avg' in report:
@@ -248,26 +331,32 @@ class CTRModel:
                     f1 = report['macro avg']['f1-score']
             except (KeyError, ValueError) as e:
                 print(f"分类报告计算失败: {e}")
-                # 手动计算
-                tp = np.sum((y_pred == 1) & (y_test == 1))
-                fp = np.sum((y_pred == 1) & (y_test == 0))
-                fn = np.sum((y_pred == 0) & (y_test == 1))
+                # 手动计算指标
+                tp = np.sum((y_pred == 1) & (y_test == 1))  # 真正例
+                fp = np.sum((y_pred == 1) & (y_test == 0))  # 假正例
+                fn = np.sum((y_pred == 0) & (y_test == 1))  # 假负例
                 
                 precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
                 recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
                 f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            # 计算训练集和测试集分数
             train_score = self.model.score(X_train, y_train)
             test_score = self.model.score(X_test, y_test)
             
-            # 暂时移除过拟合检测，专注于模型训练
+            # ========== 保存模型 ==========
             self.is_trained = True
             self.save_model()
+            
+            # ========== 特征权重分析 ==========
             feature_names = CTRFeatureConfig.get_feature_names()
             feature_weights = {}
             if hasattr(self.model, 'coef_') and self.model.coef_ is not None:
                 for i, weight in enumerate(self.model.coef_[0]):
                     if i < len(feature_names):
                         feature_weights[feature_names[i]] = abs(weight)
+            
+            # ========== 返回训练结果 ==========
             return {
                 'success': True,
                 'accuracy': round(accuracy, 4),
@@ -292,18 +381,38 @@ class CTRModel:
             return self._empty_metrics(f'训练失败: {str(e)}')
     
     def predict_ctr(self, query: str, doc_id: str, position: int, score: float, summary: str) -> float:
-        """预测CTR分数"""
+        """
+        预测CTR分数
+        
+        Args:
+            query: 用户查询
+            doc_id: 文档ID
+            position: 搜索结果位置
+            score: 原始相似度分数
+            summary: 文档摘要
+        
+        Returns:
+            预测的点击率分数 (0-1之间)
+        
+        注意：
+        - 如果模型未训练，返回原始相似度分数
+        - 预测时使用与训练时相同的特征构建方式
+        """
         if not self.is_trained or not self.model:
             return score  # 如果模型未训练，返回原始分数
         
         try:
-            # 构建特征（与训练时保持一致）
+            # ========== 构建预测特征（与训练时保持一致） ==========
+            
+            # 位置特征
             position_feature = np.array([[position]])
+            
+            # 长度特征
             doc_length = np.array([[len(summary)]])
             query_length = np.array([[len(query)]])
             summary_length = np.array([[len(summary)]])
             
-            # 查询匹配度
+            # 查询匹配度特征
             query_words = set(jieba.lcut(query))
             summary_words = set(jieba.lcut(summary))
             if len(query_words) > 0:
@@ -316,32 +425,32 @@ class CTRModel:
             query_ctr = np.array([[0.1]])  # 默认值
             doc_ctr = np.array([[0.1]])    # 默认值
             
-            # 位置衰减
+            # 位置衰减特征
             position_decay = np.array([[1.0 / (position + 1)]])
             
-            # 组合特征
+            # ========== 组合特征 ==========
             features = np.hstack([
-                position_feature,      # 位置
-                doc_length,            # 文档长度
-                query_length,          # 查询长度
-                summary_length,        # 摘要长度
-                match_score,           # 查询匹配度
-                query_ctr,             # 查询历史CTR
-                doc_ctr,               # 文档历史CTR
-                position_decay,        # 位置衰减
-                np.array([[len(jieba.lcut(query))]]),  # 查询词数量
-                np.array([[len(jieba.lcut(summary))]]), # 摘要词数量
+                position_feature,      # 位置特征
+                doc_length,            # 文档长度特征
+                query_length,          # 查询长度特征
+                summary_length,        # 摘要长度特征
+                match_score,           # 查询匹配度特征
+                query_ctr,             # 查询历史CTR特征
+                doc_ctr,               # 文档历史CTR特征
+                position_decay,        # 位置衰减特征
+                np.array([[len(jieba.lcut(query))]]),  # 查询词数量特征
+                np.array([[len(jieba.lcut(summary))]]), # 摘要词数量特征
                 np.array([[0]]),       # 时间特征（预测时设为0）
-                np.array([[score]])    # 原始相似度分数
+                np.array([[score]])    # 原始相似度分数特征
             ])
             
-            # 标准化
+            # ========== 特征标准化 ==========
             if self.scaler:
                 features_scaled = self.scaler.transform(features)
             else:
                 features_scaled = features
             
-            # 预测CTR概率
+            # ========== 预测CTR概率 ==========
             ctr_score = self.model.predict_proba(features_scaled)[0, 1]
             
             return ctr_score
@@ -351,7 +460,12 @@ class CTRModel:
             return score  # 返回原始分数
     
     def save_model(self, filepath: str = None):
-        """保存模型"""
+        """
+        保存模型到文件
+        
+        Args:
+            filepath: 保存路径，如果为None则使用默认路径
+        """
         if self.is_trained and self.model:
             # 如果没有指定文件路径，使用默认路径
             if filepath is None:
@@ -363,6 +477,7 @@ class CTRModel:
             # 确保目录存在
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
             
+            # 保存模型数据
             model_data = {
                 'model': self.model,
                 'vectorizer': self.vectorizer,
@@ -374,7 +489,15 @@ class CTRModel:
             print(f"CTR模型已保存到 {filepath}")
     
     def load_model(self, filepath: str = None):
-        """加载模型"""
+        """
+        从文件加载模型
+        
+        Args:
+            filepath: 模型文件路径，如果为None则使用默认路径
+        
+        Returns:
+            bool: 加载是否成功
+        """
         # 如果没有指定文件路径，使用默认路径
         if filepath is None:
             # 使用绝对路径，确保在任何目录下都能正确加载
@@ -387,6 +510,7 @@ class CTRModel:
                 with open(filepath, 'rb') as f:
                     model_data = pickle.load(f)
                 
+                # 恢复模型状态
                 self.model = model_data['model']
                 self.vectorizer = model_data['vectorizer']
                 self.scaler = model_data['scaler']
@@ -400,7 +524,7 @@ class CTRModel:
         return False
     
     def reset(self):
-        """重置模型"""
+        """重置模型状态"""
         self.model = None
         self.vectorizer = None
         self.scaler = None

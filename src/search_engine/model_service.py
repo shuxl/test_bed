@@ -6,6 +6,9 @@ from datetime import datetime
 import pandas as pd
 from .training_tab.ctr_model import CTRModel
 from .training_tab.ctr_config import CTRSampleConfig
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from search_engine.data_service import DataService
 
 
 class ModelService:
@@ -23,7 +26,7 @@ class ModelService:
         else:
             print(f"⚠️ CTR模型未找到，将使用未训练状态: {self.model_file}")
     
-    def train_model(self, data_service) -> Dict[str, Any]:
+    def train_model(self, data_service: 'DataService') -> Dict[str, Any]:
         """训练CTR模型"""
         try:
             print("🚀 开始训练CTR模型...")
