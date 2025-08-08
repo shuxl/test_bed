@@ -8,34 +8,24 @@ CTR (Click-Through Rate) 点击率模型用于预测用户点击搜索结果的�
 
 主要功能：
 1. 特征工程：从原始数据中提取多种特征
-2. 模型训练：使用Wide & Deep模型训练CTR预测模型
+2. 模型训练：使用逻辑回归训练CTR预测模型
 3. 预测排序：根据预测的点击率重新排序搜索结果
 """
 
 import pandas as pd
 import numpy as np
-# 注释掉原有的sklearn导入，改用TensorFlow
-# from sklearn.linear_model import LogisticRegression
-# from sklearn.feature_extraction.text import TfidfVectorizer
-# from sklearn.preprocessing import StandardScaler
-# from sklearn.model_selection import train_test_split
-# from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, roc_auc_score
 import pickle
 import os
 from typing import List, Dict, Any, Tuple
 import jieba
 from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, roc_auc_score
 from .ctr_config import CTRFeatureConfig, CTRTrainingConfig, ctr_feature_config, ctr_training_config
 
-# 新增TensorFlow相关导入
-import tensorflow as tf
-from tensorflow import keras
-from keras import layers
-from keras.models import Model
-from keras.optimizers import Adam
-from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
 
 class CTRModel:
@@ -43,126 +33,22 @@ class CTRModel:
     CTR模型类 - 负责训练和使用点击率预测模型
     
     主要组件：
-    - model: 训练好的Wide & Deep模型
+    - model: 训练好的逻辑回归模型
+    - vectorizer: 文本向量化器（当前未使用）
     - scaler: 特征标准化器
     - is_trained: 模型训练状态标志
-    - feature_dim: 特征维度
     """
     
     def __init__(self):
         """初始化CTR模型"""
-        # 注释掉原有的LR模型相关属性
-        # self.model = None          # 逻辑回归模型
-        # self.vectorizer = None     # 文本向量化器（预留）
-        # self.scaler = None         # 特征标准化器
-        # self.is_trained = False    # 训练状态标志
-        # self.model_type = 'wide_deep'  # 修改模型类型
-        # self.wide_columns = []  # Wide部分特征列
-        # self.deep_columns = []  # Deep部分特征列
-        
-        # 新增Wide & Deep模型相关属性
-        self.model = None          # Wide & Deep模型
+        self.model = None          # 逻辑回归模型
+        self.vectorizer = None     # 文本向量化器（预留）
         self.scaler = None         # 特征标准化器
         self.is_trained = False    # 训练状态标志
-        self.feature_dim = 12      # 特征维度（根据extract_features中的特征数量）
-        self.wide_columns = []     # Wide部分特征列（预留）
-        self.deep_columns = []     # Deep部分特征列（预留）
-        
-        # Wide & Deep模型超参数
-        self.deep_hidden_units = [128, 64, 32]  # Deep部分隐藏层单元数
-        self.dropout_rate = 0.3    # Dropout比率
-        self.learning_rate = 0.001 # 学习率
-        self.batch_size = 32       # 批次大小
-        self.epochs = 100          # 训练轮数
+        self.model_type = 'wide_deep'  # 修改模型类型
+        self.wide_columns = []  # Wide部分特征列
+        self.deep_columns = []  # Deep部分特征列
     
-    def _build_wide_deep_model(self, input_dim: int) -> Model:
-        """
-        构建Wide & Deep模型
-        
-        Args:
-            input_dim: 输入特征维度
-        
-        Returns:
-            Wide & Deep模型实例
-        
-        模型架构：
-        - Wide部分：线性层，用于记忆特征
-        - Deep部分：多层神经网络，用于泛化特征
-        - 输出：Wide和Deep部分拼接后经过sigmoid输出CTR概率
-        """
-        # 输入层
-        input_layer = layers.Input(shape=(input_dim,), name='input_features')
-        
-        # ========== Wide部分（线性层） ==========
-        # Wide部分使用线性变换，适合处理稀疏特征和特征交叉
-        wide_output = layers.Dense(
-            units=1, 
-            activation='linear', 
-            name='wide_output'
-        )(input_layer)
-        
-        # ========== Deep部分（多层神经网络） ==========
-        deep_input = input_layer
-        
-        # 第一层：全连接层 + BatchNormalization + Dropout
-        deep_output = layers.Dense(
-            units=self.deep_hidden_units[0], 
-            activation='relu', 
-            name='deep_layer_1'
-        )(deep_input)
-        deep_output = layers.BatchNormalization(name='bn_1')(deep_output)
-        deep_output = layers.Dropout(self.dropout_rate, name='dropout_1')(deep_output)
-        
-        # 第二层：全连接层 + BatchNormalization + Dropout
-        deep_output = layers.Dense(
-            units=self.deep_hidden_units[1], 
-            activation='relu', 
-            name='deep_layer_2'
-        )(deep_output)
-        deep_output = layers.BatchNormalization(name='bn_2')(deep_output)
-        deep_output = layers.Dropout(self.dropout_rate, name='dropout_2')(deep_output)
-        
-        # 第三层：全连接层 + BatchNormalization + Dropout
-        deep_output = layers.Dense(
-            units=self.deep_hidden_units[2], 
-            activation='relu', 
-            name='deep_layer_3'
-        )(deep_output)
-        deep_output = layers.BatchNormalization(name='bn_3')(deep_output)
-        deep_output = layers.Dropout(self.dropout_rate, name='dropout_3')(deep_output)
-        
-        # Deep部分输出层
-        deep_output = layers.Dense(
-            units=1, 
-            activation='linear', 
-            name='deep_output'
-        )(deep_output)
-        
-        # ========== 组合Wide和Deep部分 ==========
-        # 将Wide和Deep的输出拼接
-        combined_output = layers.Concatenate(name='wide_deep_combined')(
-            [wide_output, deep_output]
-        )
-        
-        # 最终输出层：全连接层 + Sigmoid激活函数
-        final_output = layers.Dense(
-            units=1, 
-            activation='sigmoid', 
-            name='ctr_output'
-        )(combined_output)
-        
-        # 构建模型
-        model = Model(inputs=input_layer, outputs=final_output, name='wide_deep_ctr_model')
-        
-        # 编译模型
-        model.compile(
-            optimizer=Adam(learning_rate=self.learning_rate),
-            loss='binary_crossentropy',
-            metrics=['accuracy', 'AUC']
-        )
-        
-        return model
-
     def extract_features(self, ctr_data: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
         """
         从CTR数据中提取特征
@@ -336,7 +222,7 @@ class CTRModel:
     
     def train(self, ctr_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        训练Wide & Deep CTR模型
+        训练CTR模型
         
         Args:
             ctr_data: CTR训练数据列表
@@ -390,10 +276,11 @@ class CTRModel:
             if len(features) == 0:
                 return self._empty_metrics('特征提取失败')
             
-            # 检查特征质量
+            # 检查特征质量 - 降低阈值，允许更多变化
             feature_std = np.std(features, axis=0)
-            if np.any(feature_std < 1e-8):
+            if np.any(feature_std < 1e-8):  # 降低阈值从1e-6到1e-8
                 print(f"警告: 特征标准差过小: {feature_std}")
+                # 不直接返回错误，而是尝试继续训练
             
             # ========== 数据标准化 ==========
             self.scaler = StandardScaler()
@@ -412,45 +299,22 @@ class CTRModel:
             if train_clicks < 1 or test_clicks < 1:
                 return self._empty_metrics('训练集或测试集缺少点击样本')
             
-            # ========== 构建Wide & Deep模型 ==========
-            self.model = self._build_wide_deep_model(input_dim=self.feature_dim)
-            
-            # ========== 设置回调函数 ==========
-            callbacks = [
-                EarlyStopping(
-                    monitor='val_loss',
-                    patience=10,
-                    restore_best_weights=True,
-                    verbose=1
-                ),
-                ReduceLROnPlateau(
-                    monitor='val_loss',
-                    factor=0.5,
-                    patience=5,
-                    min_lr=1e-6,
-                    verbose=1
-                )
-            ]
-            
             # ========== 模型训练 ==========
-            print("\n开始训练Wide & Deep模型...")
-            history = self.model.fit(
-                X_train, y_train,
-                validation_data=(X_test, y_test),
-                epochs=self.epochs,
-                batch_size=self.batch_size,
-                callbacks=callbacks,
-                verbose=1
+            self.model = LogisticRegression(
+                random_state=42, 
+                max_iter=1000,        # 最大迭代次数
+                C=0.1,                # 正则化参数，较小的C表示更强的正则化
+                class_weight='balanced'  # 处理样本不平衡问题
             )
+            self.model.fit(X_train, y_train)
             
             # ========== 模型评估 ==========
-            # 预测测试集
-            y_pred_proba = self.model.predict(X_test, verbose=0)
-            y_pred = (y_pred_proba > 0.5).astype(int).flatten()
+            y_pred = self.model.predict(X_test)
+            y_pred_proba = self.model.predict_proba(X_test)[:, 1]
             
             # 计算AUC分数
             try:
-                auc = roc_auc_score(y_test, y_pred_proba.flatten())
+                auc = roc_auc_score(y_test, y_pred_proba)
             except Exception as e:
                 print(f"AUC计算失败: {e}")
                 auc = 0.0
@@ -466,40 +330,36 @@ class CTRModel:
                     recall = report['weighted avg']['recall']
                     f1 = report['weighted avg']['f1-score']
                 else:
+                    # 如果没有weighted avg，使用macro avg
                     precision = report['macro avg']['precision']
                     recall = report['macro avg']['recall']
                     f1 = report['macro avg']['f1-score']
             except (KeyError, ValueError) as e:
                 print(f"分类报告计算失败: {e}")
                 # 手动计算指标
-                tp = np.sum((y_pred == 1) & (y_test == 1))
-                fp = np.sum((y_pred == 1) & (y_test == 0))
-                fn = np.sum((y_pred == 0) & (y_test == 1))
+                tp = np.sum((y_pred == 1) & (y_test == 1))  # 真正例
+                fp = np.sum((y_pred == 1) & (y_test == 0))  # 假正例
+                fn = np.sum((y_pred == 0) & (y_test == 1))  # 假负例
                 
                 precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
                 recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
                 f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
             
             # 计算训练集和测试集分数
-            train_score = self.model.evaluate(X_train, y_train, verbose=0)[1]  # 使用accuracy指标
-            test_score = self.model.evaluate(X_test, y_test, verbose=0)[1]      # 使用accuracy指标
+            train_score = self.model.score(X_train, y_train)
+            test_score = self.model.score(X_test, y_test)
             
             # ========== 保存模型 ==========
             self.is_trained = True
             self.save_model()
             
-            # ========== 特征权重分析（简化版本） ==========
-            # 对于神经网络，特征权重分析比较复杂，这里提供简化版本
+            # ========== 特征权重分析 ==========
             feature_names = CTRFeatureConfig.get_feature_names()
             feature_weights = {}
-            # 使用模型第一层的权重作为特征重要性（简化处理）
-            if hasattr(self.model, 'layers') and len(self.model.layers) > 0:
-                first_layer = self.model.layers[0]  # 输入层
-                if hasattr(first_layer, 'get_weights') and first_layer.get_weights():
-                    weights = first_layer.get_weights()[0]
-                    for i, weight in enumerate(np.mean(np.abs(weights), axis=1)):
-                        if i < len(feature_names):
-                            feature_weights[feature_names[i]] = float(weight)
+            if hasattr(self.model, 'coef_') and self.model.coef_ is not None:
+                for i, weight in enumerate(self.model.coef_[0]):
+                    if i < len(feature_names):
+                        feature_weights[feature_names[i]] = abs(weight)
             
             # ========== 返回训练结果 ==========
             return {
@@ -596,7 +456,7 @@ class CTRModel:
                 features_scaled = features
             
             # ========== 预测CTR概率 ==========
-            ctr_score = self.model.predict(features_scaled, verbose=0)[0, 0]
+            ctr_score = self.model.predict_proba(features_scaled)[0, 1]
             
             return ctr_score
             
@@ -617,25 +477,21 @@ class CTRModel:
                 # 使用绝对路径，确保在任何目录下都能正确保存
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 project_root = os.path.dirname(current_dir)
-                filepath = os.path.join(project_root, "models", "ctr_model.h5")
+                filepath = os.path.join(project_root, "models", "ctr_model.pkl")
             
             # 确保目录存在
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
             
-            # 保存Keras模型
-            self.model.save(filepath)
-            
-            # 保存标准化器和训练状态
-            scaler_filepath = filepath.replace('.h5', '_scaler.pkl')
-            model_info = {
+            # 保存模型数据
+            model_data = {
+                'model': self.model,
+                'vectorizer': self.vectorizer,
                 'scaler': self.scaler,
-                'is_trained': self.is_trained,
-                'feature_dim': self.feature_dim
+                'is_trained': self.is_trained
             }
-            with open(scaler_filepath, 'wb') as f:
-                pickle.dump(model_info, f)
-            
-            print(f"Wide & Deep CTR模型已保存到 {filepath}")
+            with open(filepath, 'wb') as f:
+                pickle.dump(model_data, f)
+            print(f"CTR模型已保存到 {filepath}")
     
     def load_model(self, filepath: str = None):
         """
@@ -652,33 +508,30 @@ class CTRModel:
             # 使用绝对路径，确保在任何目录下都能正确加载
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(current_dir)
-            filepath = os.path.join(project_root, "models", "ctr_model.h5")
+            filepath = os.path.join(project_root, "models", "ctr_model.pkl")
         
         if os.path.exists(filepath):
             try:
-                # 加载Keras模型
-                self.model = keras.models.load_model(filepath)
+                with open(filepath, 'rb') as f:
+                    model_data = pickle.load(f)
                 
-                # 加载标准化器和训练状态
-                scaler_filepath = filepath.replace('.h5', '_scaler.pkl')
-                if os.path.exists(scaler_filepath):
-                    with open(scaler_filepath, 'rb') as f:
-                        model_info = pickle.load(f)
-                    
-                    self.scaler = model_info['scaler']
-                    self.is_trained = model_info['is_trained']
-                    self.feature_dim = model_info.get('feature_dim', 12)
+                # 恢复模型状态
+                self.model = model_data['model']
+                self.vectorizer = model_data['vectorizer']
+                self.scaler = model_data['scaler']
+                self.is_trained = model_data['is_trained']
                 
-                print(f"Wide & Deep CTR模型已从 {filepath} 加载")
+                print(f"CTR模型已从 {filepath} 加载")
                 return True
             except Exception as e:
-                print(f"加载Wide & Deep CTR模型失败: {e}")
+                print(f"加载CTR模型失败: {e}")
                 return False
         return False
     
     def reset(self):
         """重置模型状态"""
         self.model = None
+        self.vectorizer = None
         self.scaler = None
         self.is_trained = False
-        print("Wide & Deep CTR模型已重置")
+        print("CTR模型已重置")

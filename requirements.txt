@@ -5,6 +5,9 @@ numpy>=1.21.0
 scikit-learn>=1.2.0
 jieba>=0.42.1
 
+# Deep learning framework for Wide & Deep model
+tensorflow>=2.10.0
+
 # Data processing
 matplotlib>=3.5.0
 seaborn>=0.11.0
